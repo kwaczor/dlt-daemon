@@ -333,6 +333,7 @@ int option_file_parser(DltDaemonLocal *daemon_local)
     daemon_local->flags.offlineTraceFileSize = 1000000;
     daemon_local->flags.offlineTraceMaxSize = 4000000;
     daemon_local->flags.offlineTraceFilenameTimestampBased = 1;
+    daemon_local->flags.offlineTraceLevel = DLT_LOG_WARN;
     daemon_local->flags.loggingMode = DLT_LOG_TO_CONSOLE;
     daemon_local->flags.loggingLevel = LOG_INFO;
 
@@ -572,6 +573,18 @@ int option_file_parser(DltDaemonLocal *daemon_local)
                     {
                         daemon_local->flags.offlineTraceFilenameTimestampBased = atoi(value);
                         /*printf("Option: %s=%s\n",token,value); */
+                    }
+                    else if (strcmp(token, "OfflineTraceLevel") == 0)
+                    {
+                        const int offlineTraceLevel = atoi(value);
+                        if (offlineTraceLevel >= DLT_LOG_DEFAULT && offlineTraceLevel < DLT_LOG_MAX) {
+                            daemon_local->flags.offlineTraceLevel = atoi(value);
+                            /*printf("Option: %s=%s\n",token,value); */
+                        } else {
+                            dlt_vlog(LOG_ERR,
+                                    "Invalid value %d for OfflineTraceLevel, using default %d\n",
+                                    offlineTraceLevel, daemon_local->flags.offlineTraceLevel);
+                        }
                     }
                     else if (strcmp(token, "SendECUSoftwareVersion") == 0)
                     {

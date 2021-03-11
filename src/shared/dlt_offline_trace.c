@@ -61,6 +61,7 @@
 #include <unistd.h>
 #include <dirent.h>
 #include <syslog.h>
+#include <glob.h>
 
 #include <dlt_offline_trace.h>
 #include "dlt_common.h"
@@ -173,6 +174,42 @@ unsigned int dlt_offline_trace_get_idx_of_log_file(char *file)
     return idx;
 }
 
+DltReturnValue dlt_offline_trace_remove_all_trace_files(DltOfflineTrace *trace) {
+    glob_t paths = {0};
+    int retval = {0};
+    paths.gl_pathc = 0;
+    paths.gl_pathv = NULL;
+    paths.gl_offs = 0;
+    DltReturnValue removalResult = DLT_RETURN_OK;
+
+    /* Build the dlt path search pattern, its limitied to the trace directory and the fixed dlt tracefilename parts*/
+    char pathPattern[PATH_MAX+1] = { 0 };
+    memset(pathPattern, 0, PATH_MAX);
+    snprintf(pathPattern, PATH_MAX, "%s/%s*.dlt",
+             trace->directory, DLT_OFFLINETRACE_FILENAME_BASE);
+
+    /* Build glob path list with all files matching the pattern */
+    retval = glob( pathPattern, GLOB_NOCHECK | GLOB_NOSORT,
+                   NULL, &paths );
+    if( retval == 0 ) {
+        unsigned int index = 0;
+        /*Try to remove all found files, if removal fails for one file, removal of following files is continued*/
+        for( index = 0; index < paths.gl_pathc; index++ ) {
+            if (remove(paths.gl_pathv[index])) {
+                dlt_vlog(LOG_ERR, "Remove of offline trace file %s failed!", paths.gl_pathv[index]);
+                removalResult = DLT_RETURN_ERROR;
+            } else {
+                dlt_vlog(LOG_INFO, "Offlinetrace file %s removed", paths.gl_pathv[index]);
+            }
+        }
+        globfree( &paths );
+    } else {
+        dlt_vlog(LOG_ERR, "During remove of offline trace files, glob %s failed with err=%d", pathPattern, retval);
+        removalResult = DLT_RETURN_ERROR;
+    }
+
+    return removalResult;
+}
 
 DltReturnValue dlt_offline_trace_create_new_file(DltOfflineTrace *trace)
 {
@@ -217,7 +254,17 @@ DltReturnValue dlt_offline_trace_create_new_file(DltOfflineTrace *trace)
         dlt_offline_trace_storage_dir_info(trace->directory,
                                            DLT_OFFLINETRACE_FILENAME_BASE, newest, oldest);
         idx = dlt_offline_trace_get_idx_of_log_file(newest) + 1;
-
+        //If counter wraps around to zero, delete all existing logfiles to avoid file numbering confusion
+        //during logfile creation later on
+        if ( idx == 0 ) {
+            dlt_vlog(LOG_NOTICE, "Offlinetrace reset, delete existing dlt files and starting with 0 counter");
+            const int remove_result = dlt_offline_trace_remove_all_trace_files(trace);
+            if (remove_result == DLT_RETURN_OK) {
+                dlt_vlog(LOG_NOTICE, "Offlinetrace files removed successfully");
+            } else {
+                dlt_vlog(LOG_ERR, "Offlinetrace files count not be removed successfully");
+            }
+        }
         dlt_offline_trace_file_name(trace->filename, sizeof(trace->filename),
                                     DLT_OFFLINETRACE_FILENAME_BASE, idx);
         ret = snprintf(file_path, sizeof(file_path), "%s/%s",
@@ -336,6 +383,45 @@ int dlt_offline_trace_delete_oldest_file(DltOfflineTrace *trace)
     return size_oldest;
 }
 
+int dlt_offline_trace_delete_oldest_file_based_on_filenumbering(DltOfflineTrace *trace)
+{
+    char filename_newest[NAME_MAX + 1] = { 0 }; // Not used in this function
+    char filename_oldest[NAME_MAX + 1] = { 0 };
+    char file_path[PATH_MAX + 1];
+    unsigned long size_oldest = 0;
+    struct stat status;
+
+    /* targeting oldest file, ignoring number of files in dir returned */
+    dlt_offline_trace_storage_dir_info(trace->directory,
+                                       DLT_OFFLINETRACE_FILENAME_BASE, filename_newest, filename_oldest);
+    /* delete oldest file */
+    if (filename_oldest[0]) {
+        int res = snprintf(file_path, sizeof(file_path), "%s/%s", trace->directory, filename_oldest);
+        /* if the total length of the string is greater than the buffer, silently forget it. */
+        /* snprintf: a return value of size  or more means that the output was truncated */
+        /*           if an output error is encountered, a negative value is returned. */
+        if (((unsigned int) res < sizeof(file_path)) && (res > 0)) {
+            if (0 == stat(file_path, &status)) {
+                size_oldest = status.st_size;
+            }
+        } else {
+            dlt_vlog(LOG_ERR, "Old offline trace file %s cannot be stat-ed", file_path);
+        }
+
+        if (remove(file_path)) {
+            dlt_vlog(LOG_ERR, "Remove file %s failed!", file_path);
+            return -1; /* ERROR */
+        }
+    } else {
+        dlt_vlog(LOG_ERR, "No file to be removed!");
+        return -1;     /* ERROR */
+    }
+
+    /* return size of deleted file*/
+    return size_oldest;
+}
+
+
 DltReturnValue dlt_offline_trace_check_size(DltOfflineTrace *trace)
 {
 
@@ -357,11 +443,12 @@ DltReturnValue dlt_offline_trace_check_size(DltOfflineTrace *trace)
     ssize_t s = 0;
 
     /* check size of complete offline trace */
-    while ((s = dlt_offline_trace_get_total_size(trace)) > (trace->maxSize - trace->fileSize))
+    while ((s = dlt_offline_trace_get_total_size(trace)) > (trace->maxSize - trace->fileSize)) {
         /* remove oldest files as long as new file will not fit in completely into complete offline trace */
-        if (dlt_offline_trace_delete_oldest_file(trace) < 0)
+        if (dlt_offline_trace_delete_oldest_file_based_on_filenumbering(trace) < 0) {
             return DLT_RETURN_ERROR;
-
+        }
+    }
     if (s == -1)
         return DLT_RETURN_ERROR;
 

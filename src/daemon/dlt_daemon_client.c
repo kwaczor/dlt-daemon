@@ -162,6 +162,65 @@ static int dlt_daemon_client_send_all_multiple(DltDaemon *daemon,
 
     return sent;
 }
+/* Returns the DLT trace level, extracted form the given trace header. If extraction is not possible,
+ * DLT_LOG_DEFAULT is returned instead.
+ */
+int dlt_get_loglevel_from_trace_header(
+                         unsigned char *headerData,
+                         int headerLen) {
+
+    /* headerData contains DltStandardHeader, DltStandardHeaderExtra and
+     * DltExtendedHeader. We are interested in loglevel
+     */
+    DltExtendedHeader *extendedHeader = NULL;
+    DltStandardHeader *standardHeader = NULL;
+    unsigned int standardHeaderExtraLen = sizeof(DltStandardHeaderExtra);
+    unsigned int header_len = 0;
+
+    int log_level = DLT_LOG_DEFAULT;
+    if (headerData == NULL)
+        return DLT_LOG_DEFAULT;
+
+    /* Calculate real length of DltStandardHeaderExtra */
+    standardHeader = (DltStandardHeader *) headerData;
+
+    if (!DLT_IS_HTYP_WEID(standardHeader->htyp))
+        standardHeaderExtraLen -= DLT_ID_SIZE;
+
+    if (!DLT_IS_HTYP_WSID(standardHeader->htyp))
+        standardHeaderExtraLen -= DLT_SIZE_WSID;
+
+    if (!DLT_IS_HTYP_WTMS(standardHeader->htyp))
+        standardHeaderExtraLen -= DLT_SIZE_WTMS;
+
+
+    if (DLT_IS_HTYP_UEH(standardHeader->htyp)) {
+        header_len = sizeof(DltStandardHeader) + sizeof(DltExtendedHeader) + standardHeaderExtraLen;
+
+        /* check if size2 is big enough to contain expected DLT message header */
+        if ((unsigned int) headerLen < header_len) {
+            dlt_log(LOG_ERR, "DLT message header is too small\n");
+            return DLT_LOG_DEFAULT;
+        }
+
+        extendedHeader = (DltExtendedHeader *) (headerData
+                                                + sizeof(DltStandardHeader) + standardHeaderExtraLen);
+
+        log_level = DLT_GET_MSIN_MTIN(extendedHeader->msin);
+    } else {
+        header_len = sizeof(DltStandardHeader) + standardHeaderExtraLen;
+
+        /* check if size2 is big enough to contain expected DLT message header */
+        if ((unsigned int) headerLen < header_len) {
+            dlt_log(LOG_ERR, "DLT message header is too small (without extended header)\n");
+            return 0;
+        }
+
+        log_level = DLT_LOG_VERBOSE;
+    }
+
+    return log_level;
+}
 
 int dlt_daemon_client_send(int sock,
                            DltDaemon *daemon,
@@ -214,20 +273,28 @@ int dlt_daemon_client_send(int sock,
     /* are going without buffering directly to the offline trace. Thus we have to filter out */
     /* the traces that are coming from the buffer. */
     if ((sock != DLT_DAEMON_SEND_FORCE) && (daemon->state != DLT_DAEMON_STATE_SEND_BUFFER)) {
-        if (((daemon->mode == DLT_USER_MODE_INTERNAL) || (daemon->mode == DLT_USER_MODE_BOTH))
-            && daemon_local->flags.offlineTraceDirectory[0]) {
-            if (dlt_offline_trace_write(&(daemon_local->offlineTrace), storage_header, storage_header_size, data1,
-                                        size1, data2, size2)) {
-                static int error_dlt_offline_trace_write_failed = 0;
+            if ( ((daemon->mode == DLT_USER_MODE_INTERNAL) || (daemon->mode == DLT_USER_MODE_BOTH))
+                 && daemon_local->flags.offlineTraceDirectory[0]) {
 
-                if (!error_dlt_offline_trace_write_failed) {
-                    dlt_vlog(LOG_ERR, "%s: dlt_offline_trace_write failed!\n", __func__);
-                    error_dlt_offline_trace_write_failed = 1;
+                const int offline_trace_logLevel = daemon_local->flags.offlineTraceLevel;
+                const int trace_log_level = dlt_get_loglevel_from_trace_header(data1, size1);
+                if ( (offline_trace_logLevel == DLT_LOG_DEFAULT)
+                     || ((trace_log_level > DLT_LOG_OFF) && (trace_log_level <= offline_trace_logLevel))
+                     )
+                {
+                    if (dlt_offline_trace_write(&(daemon_local->offlineTrace), storage_header, storage_header_size,
+                                                data1, size1, data2, size2)) {
+                        static int error_dlt_offline_trace_write_failed = 0;
+
+                        if (!error_dlt_offline_trace_write_failed) {
+                            dlt_vlog(LOG_ERR, "%s: dlt_offline_trace_write failed!\n", __func__);
+                            error_dlt_offline_trace_write_failed = 1;
+                        }
+                    }
+                    /*return DLT_DAEMON_ERROR_WRITE_FAILED; */
                 }
-
-                /*return DLT_DAEMON_ERROR_WRITE_FAILED; */
             }
-        }
+
 
         /* write messages to offline logstorage only if there is an extended header set
          * this need to be checked because the function is dlt_daemon_client_send is called by

@@ -104,6 +104,7 @@ typedef struct
     int offlineTraceFileSize;     /**< (int) Maximum size in bytes of one trace file (Default: 1000000) */
     int offlineTraceMaxSize;     /**< (int) Maximum size of all trace files (Default: 4000000) */
     int offlineTraceFilenameTimestampBased;  /**< (int) timestamp based or index based (Default: 1 Timestamp based) */
+    int offlineTraceLevel;   /**< (int) The logging level for offlineTrace logging of dlt-daemon (Default: 3) */
     int loggingMode;     /**< (int) The logging console for internal logging of dlt-daemon (Default: 0) */
     int loggingLevel;     /**< (int) The logging level for internal logging of dlt-daemon (Default: 6) */
     char loggingFilename[DLT_DAEMON_FLAG_MAX]; /**< (String: Filename) The logging filename if internal logging mode is log to file (Default: /tmp/log) */
